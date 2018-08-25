@@ -6,11 +6,12 @@ class MattermostListener < Redmine::Hook::Listener
 
 		channels = channels_for_project issue.project
 		url = url_for_project issue.project
+		enableMentions = mentions_for_project issue.project
 
 		return unless channels.any? and url
 		return if issue.is_private?
 
-		msg = "[#{escape issue.project}] #{escape issue.author} created <#{object_url issue}|#{escape issue}>#{mentions issue.description}"
+		msg = "[#{escape issue.project}] #{escape issue.author} created <#{object_url issue}|#{escape issue}>#{mentions issue.description}#{hashtags issue.description}"
 
 		attachment = {}
 		attachment[:text] = escape issue.description if issue.description
@@ -34,6 +35,11 @@ class MattermostListener < Redmine::Hook::Listener
 			:short => true
 		} if Setting.plugin_redmine_mattermost["display_watchers"] == 'yes'
 
+		if enableMentions == '1'
+			user = User.find(issue.assigned_to_id) rescue nil
+			msg += mentions " @#{user.login}" if user
+		end
+
 		speak msg, channels, attachment, url
 	end
 
@@ -43,16 +49,25 @@ class MattermostListener < Redmine::Hook::Listener
 
 		channels = channels_for_project issue.project
 		url = url_for_project issue.project
+		enableMentions = mentions_for_project issue.project
 
 		return unless channels.any? and url and Setting.plugin_redmine_mattermost["post_updates"] == '1'
 		return if issue.is_private?
 		return if journal.private_notes?
 
-		msg = "[#{escape issue.project}] #{escape journal.user.to_s} updated <#{object_url issue}|#{escape issue}>#{mentions journal.notes}"
+		msg = "[#{escape issue.project}] #{escape journal.user.to_s} updated <#{object_url issue}|#{escape issue}>#{mentions journal.notes}#{hashtags journal.notes}"
 
 		attachment = {}
 		attachment[:text] = escape journal.notes if journal.notes
 		attachment[:fields] = journal.details.map { |d| detail_to_field d }
+
+		detail = journal.details.
+			where(:property => 'attr', :prop_key => 'assigned_to_id').first
+
+		if detail and enableMentions == '1'
+			user = User.find(detail.value) rescue nil
+			msg += mentions " @#{user.login}" if user
+		end
 
 		speak msg, channels, attachment, url
 	end
@@ -209,6 +224,12 @@ private
 		val
 	end
 
+	# mentions when assigned
+	def mentions_for_project(proj)
+		cf = ProjectCustomField.find_by_name("Mattermost Mentions")
+		return proj.custom_value_for(cf).value rescue '1'
+	end
+
 	def detail_to_field(detail)
 		field_format = nil
 
@@ -286,5 +307,19 @@ private
 		# mattermost usernames may only contain lowercase letters, numbers,
 		# dashes and underscores and must start with a letter or number.
 		text.scan(/@[a-z0-9][a-z0-9_\-]*/).uniq
+	end
+
+	def hashtags text
+		return nil if text.nil?
+		tags = extract_tags text
+		tags.present? ? "\n" + tags.join(' ').gsub(/\r\n|\r|\n|\s|\t/, " ") : nil
+	end
+
+	def extract_tags text = ''
+		if text.nil?
+			text = ''
+		end
+
+		text.scan(/#\S*(?:\w|\W)(?:\s)?/).uniq
 	end
 end
